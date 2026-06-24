@@ -1,0 +1,141 @@
+1. Новый BL-класс строки 
+
+Создать BLVedomostWork.cs в той же папке BL (колонки 1:1):
+
+namespace ARMS 
+{
+    public class BLVedomostWork
+    {
+        public int NN { get; set; }                 
+        public string Department { get; set; }      
+        public string FIO { get; set; }             
+        public string Post { get; set; }           
+        public string Category { get; set; }       
+        public string TabNumber { get; set; }       
+        public int Hours { get; set; }             
+        public decimal SumDoplata { get; set; }     
+        public string Document { get; set; }        
+    }
+}
+
+2. Источник данных: BuildVedomostSource()
+
+Единственный метод сбора.
+
+private List<BLVedomostWork> BuildVedomostSource()
+{
+    int year   = StaticFunction.GetIntForObject(cmbYearDocument.Text, 0);
+    int month  = cmbMonthDocument.SelectedIndex + 1;
+    var uch    = (BLRefUchastok)cmbUchastok.SelectedItem;
+    bool allU  = uch.Id == 0;
+
+    // "Согласованные" = подписка с o296NachState == 1
+    var zak = ListData.GetSubscriptionOplataDocument().FindAll(s => s.o296NachState == 1);
+
+    // --- ЖУРНАЛ: Vse -> Zakrit ---
+    var journalZak =
+        (from t in ListData.GetJournalDocumentOplataPrepod()
+                          .Where(t => t.Year == year && t.Month == month
+                                   && (allU || t.ShifrUchastok == uch.Shfr))
+         join s in zak on t.Id equals s.Id_OplataJornal
+         select t).ToList();
+
+    // --- СОГЛАШЕНИЯ (рабочие 3/4 + студенты 1/2): Vse -> Zakrit ---
+    var agreementZak =
+        (from t in ListData.GetAgreementDocumentOplataPrepod()
+                          .Where(t => t.Year == year && t.Month == month
+                                   && (allU || t.ShifrUchastok == uch.Shfr))
+         join s in zak on t.Id equals s.Id_OplataAgreement
+         select t).ToList();
+
+    var result = new List<BLVedomostWork>();
+
+    // ЖУРНАЛ
+    foreach (var t in journalZak)
+        result.Add(new BLVedomostWork
+        {
+            Department = StaticFunction.GetStringForObject(t.InstructorDepartment),
+            FIO        = StaticFunction.GetStringForObject(t.InstructorFIO),
+            Post       = "",                                   // в журнале должности нет
+            Category   = StaticFunction.GetStringForObject(t.CodeCathegory),
+            TabNumber  = StaticFunction.GetStringForObject(t.Id_InstructorFIO),   // ?: таб.№ журнала
+            Hours      = StaticFunction.GetIntForObject(t.CountWorkHours, 0),
+            SumDoplata = StaticFunction.GetDecimalForObject(t.SumOplata, 0),
+            Document   = StaticFunction.GetStringForObject(t.Number)
+        });
+
+    // СОГЛАШЕНИЯ (рабочие + студенты — общий тип BLAgreementDocumentOplataPrepod)
+    foreach (var t in agreementZak)
+        result.Add(new BLVedomostWork
+        {
+            Department = StaticFunction.GetStringForObject(t.InstructorDepartment),
+            FIO        = StaticFunction.GetStringForObject(t.InstructorFIO),
+            Post       = StaticFunction.GetStringForObject(t.InstructorPost),
+            Category   = StaticFunction.GetStringForObject(t.CodeCathegory),
+            TabNumber  = StaticFunction.GetStringForObject(t.InstructorTabNumber),
+            Hours      = StaticFunction.GetIntForObject(t.CountWorkHours, 0),       // ?: для студентов, возможно, Instructor_CountWorkDay
+            SumDoplata = StaticFunction.GetDecimalForObject(t.SumOpl, 0),
+            Document   = StaticFunction.GetStringForObject(t.Number)
+        });
+
+    int n = 1;
+    foreach (var r in result) r.NN = n++;
+    return result;
+}
+
+3. UI: новый tabPage + грид
+
+Самый быстрый путь без правки дизайнера — построить вкладку программно. Вызвать InitVedomostTab(); в конце конструктора формы (или в ..._Shown/..._Load). Заменить tabControlMain на реальное имя вашего TabControl.
+
+private DataGridView dtgViewVedomost;
+
+private void InitVedomostTab()
+{
+    var tab = new TabPage("Ведомость");
+
+    var btn = new Button { Text = "Сформировать ведомость", Dock = DockStyle.Top, Height = 32 };
+    btn.Click += (s, e) => RefreshVedomost();
+
+    dtgViewVedomost = new DataGridView
+    {
+        Dock = DockStyle.Fill,
+        AutoGenerateColumns = false,
+        ReadOnly = true,
+        AllowUserToAddRows = false,
+        RowHeadersVisible = false
+    };
+    AddVedomostColumns(dtgViewVedomost);
+
+    tab.Controls.Add(dtgViewVedomost);
+    tab.Controls.Add(btn);
+    tabControlMain.TabPages.Add(tab);   // ?: имя вашего TabControl
+}
+
+private void AddVedomostColumns(DataGridView g)
+{
+    void Col(string prop, string header, int w, string fmt = null)
+    {
+        var c = new DataGridViewTextBoxColumn { DataPropertyName = prop, HeaderText = header, Width = w };
+        if (fmt != null)
+        {
+            c.DefaultCellStyle.Format = fmt;
+            c.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        }
+        g.Columns.Add(c);
+    }
+
+    Col("NN", "П/П", 45);
+    Col("Department", "Отдел", 150);
+    Col("FIO", "Ф.И.О.", 200);
+    Col("Post", "Должность/профессия", 170);
+    Col("Category", "Кат.", 50);
+    Col("TabNumber", "Таб. №", 70);
+    Col("Hours", "Часы", 60);
+    Col("SumDoplata", "Сумма доплаты", 120, "N2");
+    Col("Document", "Документ", 130);
+}
+
+private void RefreshVedomost()
+{
+    dtgViewVedomost.DataSource = BuildVedomostSource();
+}
